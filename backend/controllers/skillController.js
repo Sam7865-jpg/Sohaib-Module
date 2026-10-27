@@ -4,6 +4,22 @@ import SkillEvidence from '../models/SkillEvidence.js';
 import { SKILL_CATALOG, ALL_CATEGORIES } from '../config/skillCatalog.js';
 import { extractSkillsFromExperience } from '../services/aiSkillService.js';
 
+// Helper: Safely get existing worker profile or auto-create one if missing
+const getOrCreateWorkerProfile = async (user) => {
+  let profile = await WorkerProfile.findOne({ user: user._id });
+  if (!profile) {
+    profile = await WorkerProfile.create({
+      user: user._id,
+      occupation: 'Skilled Worker',
+      category: 'Home Maintenance',
+      skills: [],
+      experienceYears: 1,
+      profileCompletion: 20,
+    });
+  }
+  return profile;
+};
+
 // Helper: Synchronize WorkerProfile.skills string array with WorkerSkill collection
 const syncWorkerProfileSkills = async (workerProfileId) => {
   const allSkills = await WorkerSkill.find({ workerProfileId });

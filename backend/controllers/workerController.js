@@ -15,6 +15,34 @@ const calculateCompletion = (profile) => {
   return Math.min(score, 100);
 };
 
+// Single exported helper function
+export const getOrCreateWorkerProfile = async (userId, initialData = {}) => {
+  let profile = await WorkerProfile.findOne({ user: userId });
+  if (!profile) {
+    const newProfileData = {
+      user: userId,
+      occupation: initialData.occupation || 'Skilled Worker',
+      category: initialData.category || 'Home Maintenance',
+      skills: initialData.skills || [],
+      experienceYears: Number(initialData.experienceYears) || 0,
+      hourlyRate: Number(initialData.hourlyRate) || 0,
+      dailyRate: Number(initialData.dailyRate) || 0,
+      city: initialData.city || 'Islamabad',
+      address: initialData.address || '',
+      whatsappNumber: initialData.whatsappNumber || '',
+      emergencyContact: initialData.emergencyContact || '',
+      cnicNumber: initialData.cnicNumber || '',
+      languages: initialData.languages || ['Urdu'],
+      availability: initialData.availability || 'Available',
+      bio: initialData.bio || '',
+      workHistory: Array.isArray(initialData.workHistory) ? initialData.workHistory : [],
+    };
+    newProfileData.profileCompletion = calculateCompletion(newProfileData);
+    profile = await WorkerProfile.create(newProfileData);
+  }
+  return profile;
+};
+
 // 1. GET: /api/worker/profile (Worker apna profile dekhe)
 export const getWorkerProfile = async (req, res) => {
   try {

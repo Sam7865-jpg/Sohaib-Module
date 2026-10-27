@@ -50,16 +50,19 @@ app.use('/auth', authRoutes);
 app.use('/api/worker', workerRoutes);
 app.use('/worker', workerRoutes);
 
+// Skill routes mounted to handle both /api/skills and /api/worker/skills
 app.use('/api/skills', skillRoutes);
 app.use('/skills', skillRoutes);
+app.use('/api/worker/skills', skillRoutes);
 
 app.use('/api/evidence', evidenceRoutes);
 app.use('/evidence', evidenceRoutes);
 
-// Agar laptop par chal raha ho to port listen karein, Vercel par auto-handle hoga
+// Server port listener logic
+const PORT = process.env.PORT || 5000;
+
 if (!process.env.VERCEL) {
-  const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
+  app.listen(PORT, '0.0.0.0', () => {
     console.log(`Backend server active on http://localhost:${PORT}`);
   });
 }

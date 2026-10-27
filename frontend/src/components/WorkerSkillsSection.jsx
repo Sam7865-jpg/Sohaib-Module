@@ -34,6 +34,9 @@ export default function WorkerSkillsSection({ onSkillChange }) {
   const [loading, setLoading] = useState(true);
   const [statusMsg, setStatusMsg] = useState({ type: '', text: '' });
 
+  // Voice Mic State
+  const [isListening, setIsListening] = useState(false);
+
   // Manual Add Form State
   const [manualSkill, setManualSkill] = useState({
     skillName: '',
@@ -69,10 +72,15 @@ export default function WorkerSkillsSection({ onSkillChange }) {
   const loadSkills = async () => {
     try {
       setLoading(true);
-      const { data } = await API.get('/skills');
-      setSkills(data.skills || []);
-      if (data.catalog) setCatalog(data.catalog);
-      if (onSkillChange) onSkillChange(data.skills);
+      let res;
+      try {
+        res = await API.get('/skills');
+      } catch (e) {
+        res = await API.get('/worker/skills');
+      }
+      setSkills(res.data.skills || []);
+      if (res.data.catalog) setCatalog(res.data.catalog);
+      if (onSkillChange) onSkillChange(res.data.skills);
     } catch (err) {
       console.error('Failed to load worker skills', err);
     } finally {
@@ -84,6 +92,43 @@ export default function WorkerSkillsSection({ onSkillChange }) {
     loadSkills();
   }, []);
 
+  // 🎙️ Voice Recognition Function (Mic Feature)
+  const startVoiceRecognition = () => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      alert('Aapka browser voice typing support nahi karta. Chrome ya Edge browser use karein.');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US'; // Captures spoken Urdu/English in Latin script for accurate AI processing
+    recognition.continuous = false;
+    recognition.interimResults = false;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
+      setExperienceText((prev) => (prev ? `${prev} ${transcript}` : transcript));
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      alert('Voice capture mein issue aaya. Baraye meherbani dobara try karein.');
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.start();
+  };
+
   // 1. Manual Skill Submission
   const handleAddManualSkill = async (e) => {
     e.preventDefault();
@@ -91,7 +136,11 @@ export default function WorkerSkillsSection({ onSkillChange }) {
     setAddingManual(true);
     setStatusMsg({ type: '', text: '' });
     try {
-      await API.post('/skills', manualSkill);
+      try {
+        await API.post('/skills', manualSkill);
+      } catch (err) {
+        await API.post('/worker/skills', manualSkill);
+      }
       setStatusMsg({ type: 'success', text: `Skill "${manualSkill.skillName}" added successfully!` });
       setManualSkill({
         skillName: '',
@@ -110,7 +159,11 @@ export default function WorkerSkillsSection({ onSkillChange }) {
   const handleDeleteSkill = async (skillId) => {
     if (!window.confirm('Are you sure you want to remove this skill and its associated evidence?')) return;
     try {
-      await API.delete(`/skills/${skillId}`);
+      try {
+        await API.delete(`/skills/${skillId}`);
+      } catch (e) {
+        await API.delete(`/worker/skills/${skillId}`);
+      }
       setStatusMsg({ type: 'success', text: 'Skill removed.' });
       loadSkills();
     } catch (err) {
@@ -129,7 +182,14 @@ export default function WorkerSkillsSection({ onSkillChange }) {
     setAiResponse(null);
     setAcceptedSkills({});
     try {
-      const { data } = await API.post('/skills/extract-ai', { experienceText });
+      let data;
+      try {
+        const res = await API.post('/skills/extract-ai', { experienceText });
+        data = res.data;
+      } catch (e) {
+        const res = await API.post('/worker/skills/extract-ai', { experienceText });
+        data = res.data;
+      }
       setAiResponse(data);
 
       if (data.isVague) {
@@ -138,7 +198,6 @@ export default function WorkerSkillsSection({ onSkillChange }) {
           text: data.message || 'Description is too vague to identify specific trade skills reliably.',
         });
       } else {
-        // Pre-check all detected skills by default for easy review
         const initialMap = {};
         (data.detectedSkills || []).forEach((s, idx) => {
           initialMap[`det-${idx}`] = { ...s, claimedExperienceYears: 2, accepted: true };
@@ -182,7 +241,14 @@ export default function WorkerSkillsSection({ onSkillChange }) {
     }
 
     try {
-      const { data } = await API.post('/skills/batch-confirm', { acceptedSkills: toSave });
+      let data;
+      try {
+        const res = await API.post('/skills/batch-confirm', { acceptedSkills: toSave });
+        data = res.data;
+      } catch (e) {
+        const res = await API.post('/worker/skills/batch-confirm', { acceptedSkills: toSave });
+        data = res.data;
+      }
       setStatusMsg({ type: 'success', text: data.message });
       setAiResponse(null);
       setExperienceText('');
@@ -208,7 +274,6 @@ export default function WorkerSkillsSection({ onSkillChange }) {
       fileSize: 0,
       fileBase64: '',
     });
-    // Fetch previous evidence
     try {
       const { data } = await API.get(`/evidence/skill/${skill._id}`);
       setSkillEvidenceList(data || []);
@@ -217,7 +282,7 @@ export default function WorkerSkillsSection({ onSkillChange }) {
     }
   };
 
-  // 6. Handle File Select (Convert to Base64)
+  // 6. Handle File Select
   const handleFileChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -254,10 +319,8 @@ export default function WorkerSkillsSection({ onSkillChange }) {
     try {
       const { data } = await API.post(`/evidence/upload/${selectedSkill._id}`, evidenceForm);
       setStatusMsg({ type: 'success', text: data.message });
-      // Refresh modal list
       const updatedList = await API.get(`/evidence/skill/${selectedSkill._id}`);
       setSkillEvidenceList(updatedList.data || []);
-      // Reset form file
       setEvidenceForm((prev) => ({
         ...prev,
         issuer: '',
@@ -288,16 +351,33 @@ export default function WorkerSkillsSection({ onSkillChange }) {
   };
 
   return (
-    <div style={{ marginTop: '10px' }}>
+    <div
+      style={{
+        marginTop: '10px',
+      }}
+    >
       {statusMsg.text && (
         <div
           className={`alert-message ${
-            statusMsg.type === 'success' ? 'success' : statusMsg.type === 'warning' ? 'warning' : 'error'
+            statusMsg.type === 'success'
+              ? 'success'
+              : statusMsg.type === 'warning'
+              ? 'warning'
+              : 'error'
           }`}
           style={{
             background:
-              statusMsg.type === 'success' ? '#dcfce7' : statusMsg.type === 'warning' ? '#fef3c7' : '#fee2e2',
-            color: statusMsg.type === 'success' ? '#15803d' : statusMsg.type === 'warning' ? '#b45309' : '#dc2626',
+              statusMsg.type === 'success'
+                ? '#dcfce7'
+                : statusMsg.type === 'warning'
+                ? '#fef3c7'
+                : '#fee2e2',
+            color:
+              statusMsg.type === 'success'
+                ? '#15803d'
+                : statusMsg.type === 'warning'
+                ? '#b45309'
+                : '#dc2626',
             padding: '12px 16px',
             borderRadius: '10px',
             marginBottom: '20px',
@@ -310,7 +390,13 @@ export default function WorkerSkillsSection({ onSkillChange }) {
       )}
 
       {/* Grid: Left = AI Profiler & Manual Add | Right = Structured Skills & Evidence List */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '28px' }}>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr',
+          gap: '28px',
+        }}
+      >
         {/* SECTION 1: AI EXPERIENCE & SKILL PROFILER */}
         <div
           style={{
@@ -321,25 +407,97 @@ export default function WorkerSkillsSection({ onSkillChange }) {
             boxShadow: '0 4px 6px -1px rgba(0,0,0,0.03)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-            <span style={{ fontSize: '1.4rem' }}>🤖</span>
-            <div>
-              <h2 style={{ fontSize: '1.25rem', fontWeight: '800', color: '#0f172a' }}>
-                Module 2: AI Experience & Skill Profiler
-              </h2>
-              <p style={{ fontSize: '0.84rem', color: '#64748b' }}>
-                Describe your hands-on trade experience in natural language. Our AI engine identifies technical
-                skills and categorizes them automatically.
-              </p>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              marginBottom: '8px',
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '10px',
+              }}
+            >
+              <span
+                style={{
+                  fontSize: '1.4rem',
+                }}
+              >
+                🤖
+              </span>
+              <div>
+                <h2
+                  style={{
+                    fontSize: '1.25rem',
+                    fontWeight: '800',
+                    color: '#0f172a',
+                  }}
+                >
+                  Module 2: AI Experience & Skill Profiler
+                </h2>
+                <p
+                  style={{
+                    fontSize: '0.84rem',
+                    color: '#64748b',
+                  }}
+                >
+                  Describe your hands-on trade experience in natural language or tap the Mic button to speak!
+                </p>
+              </div>
             </div>
+
+            {/* 🎙️ Voice Mic Button */}
+            <button
+              type="button"
+              onClick={startVoiceRecognition}
+              style={{
+                background: isListening ? '#ef4444' : '#2563eb',
+                color: 'white',
+                border: 'none',
+                borderRadius: '12px',
+                padding: '8px 14px',
+                fontWeight: '700',
+                fontSize: '0.85rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: isListening ? '0 0 10px rgba(239, 68, 68, 0.6)' : 'none',
+              }}
+            >
+              🎙️ {isListening ? 'Sunte hain... (Listening)' : 'Speak Experience (Mic)'}
+            </button>
           </div>
 
           {/* Quick Pre-filled Test Cases for Demonstration */}
-          <div style={{ marginTop: '14px', marginBottom: '14px' }}>
-            <label style={{ fontSize: '0.78rem', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>
+          <div
+            style={{
+              marginTop: '14px',
+              marginBottom: '14px',
+            }}
+          >
+            <label
+              style={{
+                fontSize: '0.78rem',
+                fontWeight: '700',
+                color: '#475569',
+                display: 'block',
+                marginBottom: '6px',
+              }}
+            >
               ⚡ QUICK TEST CASE PRESETS (CLICK TO TRY):
             </label>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: '6px',
+              }}
+            >
               {PRESET_TEST_CASES.map((preset, idx) => (
                 <button
                   key={idx}
@@ -365,10 +523,14 @@ export default function WorkerSkillsSection({ onSkillChange }) {
           <textarea
             rows="4"
             className="input-control"
-            placeholder="e.g. I have worked as an electrician for five years, installing house wiring, repairing electrical faults, and installing solar panels and inverter backup systems..."
+            placeholder="Apna kaam bol kar batayein ya type karein (e.g. Main 5 saal se electrician ka kaam kar raha hoon, wiring aur inverter fixing janta hoon...)"
             value={experienceText}
             onChange={(e) => setExperienceText(e.target.value)}
-            style={{ width: '100%', boxSizing: 'border-box', marginBottom: '12px' }}
+            style={{
+              width: '100%',
+              boxSizing: 'border-box',
+              marginBottom: '12px',
+            }}
           />
 
           <button
@@ -376,7 +538,12 @@ export default function WorkerSkillsSection({ onSkillChange }) {
             className="btn-action-primary"
             onClick={handleExtractWithAI}
             disabled={aiLoading}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+            }}
           >
             {aiLoading ? 'Analyzing Experience with AI...' : '✨ Extract & Suggest Skills with AI'}
           </button>
@@ -392,12 +559,23 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                 border: '1px solid #cbd5e1',
               }}
             >
-              <h4 style={{ fontSize: '0.98rem', fontWeight: '700', color: '#1e293b', marginBottom: '12px' }}>
+              <h4
+                style={{
+                  fontSize: '0.98rem',
+                  fontWeight: '700',
+                  color: '#1e293b',
+                  marginBottom: '12px',
+                }}
+              >
                 AI Analysis Results (Review & Confirm Before Saving):
               </h4>
 
               {/* Directly Detected Skills */}
-              <div style={{ marginBottom: '16px' }}>
+              <div
+                style={{
+                  marginBottom: '16px',
+                }}
+              >
                 <span
                   style={{
                     fontSize: '0.76rem',
@@ -411,7 +589,13 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                 >
                   ✓ DIRECTLY DETECTED SKILLS (FROM YOUR EXPERIENCE)
                 </span>
-                <div style={{ display: 'grid', gap: '8px', marginTop: '8px' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '8px',
+                    marginTop: '8px',
+                  }}
+                >
                   {(aiResponse.detectedSkills || []).map((s, idx) => {
                     const key = `det-${idx}`;
                     const item = acceptedSkills[key] || s;
@@ -428,22 +612,56 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                           border: item.accepted ? '2px solid #2563eb' : '1px solid #e2e8f0',
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '10px',
+                          }}
+                        >
                           <input
                             type="checkbox"
                             checked={Boolean(item.accepted)}
                             onChange={() => toggleAiSkill(key)}
-                            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                            style={{
+                              width: '18px',
+                              height: '18px',
+                              cursor: 'pointer',
+                            }}
                           />
                           <div>
-                            <strong style={{ fontSize: '0.92rem' }}>{item.name}</strong>
-                            <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
+                            <strong
+                              style={{
+                                fontSize: '0.92rem',
+                              }}
+                            >
+                              {item.name}
+                            </strong>
+                            <div
+                              style={{
+                                fontSize: '0.76rem',
+                                color: '#64748b',
+                              }}
+                            >
                               Category: {item.category}
                             </div>
                           </div>
                         </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontSize: '0.78rem', color: '#475569' }}>Claimed Exp:</span>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: '0.78rem',
+                              color: '#475569',
+                            }}
+                          >
+                            Claimed Exp:
+                          </span>
                           <input
                             type="number"
                             min="1"
@@ -452,12 +670,27 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                             onChange={(e) =>
                               setAcceptedSkills((prev) => ({
                                 ...prev,
-                                [key]: { ...prev[key], claimedExperienceYears: Number(e.target.value) },
+                                [key]: {
+                                  ...prev[key],
+                                  claimedExperienceYears: Number(e.target.value),
+                                },
                               }))
                             }
-                            style={{ width: '55px', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                            style={{
+                              width: '55px',
+                              padding: '4px',
+                              borderRadius: '6px',
+                              border: '1px solid #cbd5e1',
+                            }}
                           />
-                          <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Yrs</span>
+                          <span
+                            style={{
+                              fontSize: '0.75rem',
+                              color: '#64748b',
+                            }}
+                          >
+                            Yrs
+                          </span>
                         </div>
                       </div>
                     );
@@ -466,75 +699,135 @@ export default function WorkerSkillsSection({ onSkillChange }) {
               </div>
 
               {/* Additional Suggestions */}
-              {aiResponse.additionalSuggestions && aiResponse.additionalSuggestions.length > 0 && (
-                <div style={{ marginBottom: '16px' }}>
-                  <span
+              {aiResponse.additionalSuggestions &&
+                aiResponse.additionalSuggestions.length > 0 && (
+                  <div
                     style={{
-                      fontSize: '0.76rem',
-                      fontWeight: '700',
-                      color: '#4338ca',
-                      background: '#e0e7ff',
-                      padding: '3px 8px',
-                      borderRadius: '6px',
-                      letterSpacing: '0.5px',
+                      marginBottom: '16px',
                     }}
                   >
-                    💡 COMPLEMENTARY SKILL SUGGESTIONS (OPTIONAL)
-                  </span>
-                  <div style={{ display: 'grid', gap: '8px', marginTop: '8px' }}>
-                    {aiResponse.additionalSuggestions.map((s, idx) => {
-                      const key = `sug-${idx}`;
-                      const item = acceptedSkills[key] || s;
-                      return (
-                        <div
-                          key={key}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            padding: '10px 14px',
-                            background: 'white',
-                            borderRadius: '10px',
-                            border: item.accepted ? '2px solid #6366f1' : '1px solid #e2e8f0',
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <input
-                              type="checkbox"
-                              checked={Boolean(item.accepted)}
-                              onChange={() => toggleAiSkill(key)}
-                              style={{ width: '18px', height: '18px', cursor: 'pointer' }}
-                            />
-                            <div>
-                              <strong style={{ fontSize: '0.92rem' }}>{item.name}</strong>
-                              <div style={{ fontSize: '0.76rem', color: '#64748b' }}>
-                                Category: {item.category}
+                    <span
+                      style={{
+                        fontSize: '0.76rem',
+                        fontWeight: '700',
+                        color: '#4338ca',
+                        background: '#e0e7ff',
+                        padding: '3px 8px',
+                        borderRadius: '6px',
+                        letterSpacing: '0.5px',
+                      }}
+                    >
+                      💡 COMPLEMENTARY SKILL SUGGESTIONS (OPTIONAL)
+                    </span>
+                    <div
+                      style={{
+                        display: 'grid',
+                        gap: '8px',
+                        marginTop: '8px',
+                      }}
+                    >
+                      {aiResponse.additionalSuggestions.map((s, idx) => {
+                        const key = `sug-${idx}`;
+                        const item = acceptedSkills[key] || s;
+                        return (
+                          <div
+                            key={key}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '10px 14px',
+                              background: 'white',
+                              borderRadius: '10px',
+                              border: item.accepted ? '2px solid #6366f1' : '1px solid #e2e8f0',
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '10px',
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={Boolean(item.accepted)}
+                                onChange={() => toggleAiSkill(key)}
+                                style={{
+                                  width: '18px',
+                                  height: '18px',
+                                  cursor: 'pointer',
+                                }}
+                              />
+                              <div>
+                                <strong
+                                  style={{
+                                    fontSize: '0.92rem',
+                                  }}
+                                >
+                                  {item.name}
+                                </strong>
+                                <div
+                                  style={{
+                                    fontSize: '0.76rem',
+                                    color: '#64748b',
+                                  }}
+                                >
+                                  Category: {item.category}
+                                </div>
                               </div>
                             </div>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px',
+                              }}
+                            >
+                              <span
+                                style={{
+                                  fontSize: '0.78rem',
+                                  color: '#475569',
+                                }}
+                              >
+                                Claimed Exp:
+                              </span>
+                              <input
+                                type="number"
+                                min="1"
+                                max="50"
+                                value={item.claimedExperienceYears || 1}
+                                onChange={(e) =>
+                                  setAcceptedSkills((prev) => ({
+                                    ...prev,
+                                    [key]: {
+                                      ...prev[key],
+                                      claimedExperienceYears: Number(e.target.value),
+                                    },
+                                  }))
+                                }
+                                style={{
+                                  width: '55px',
+                                  padding: '4px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #cbd5e1',
+                                }}
+                              />
+                              <span
+                                style={{
+                                  fontSize: '0.75rem',
+                                  color: '#64748b',
+                                }}
+                              >
+                                Yrs
+                              </span>
+                            </div>
                           </div>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ fontSize: '0.78rem', color: '#475569' }}>Claimed Exp:</span>
-                            <input
-                              type="number"
-                              min="1"
-                              max="50"
-                              value={item.claimedExperienceYears || 1}
-                              onChange={(e) =>
-                                setAcceptedSkills((prev) => ({
-                                  ...prev,
-                                  [key]: { ...prev[key], claimedExperienceYears: Number(e.target.value) },
-                                }))
-                              }
-                              style={{ width: '55px', padding: '4px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
-                            />
-                            <span style={{ fontSize: '0.75rem', color: '#64748b' }}>Yrs</span>
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               <button
                 type="button"
@@ -567,20 +860,50 @@ export default function WorkerSkillsSection({ onSkillChange }) {
             boxShadow: '0 4px 6px -1px rgba(0,0,0,0.03)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '14px' }}>
-            <span style={{ fontSize: '1.3rem' }}>🛠️</span>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              marginBottom: '14px',
+            }}
+          >
+            <span
+              style={{
+                fontSize: '1.3rem',
+              }}
+            >
+              🛠️
+            </span>
             <div>
-              <h3 style={{ fontSize: '1.15rem', fontWeight: '800', color: '#0f172a' }}>
+              <h3
+                style={{
+                  fontSize: '1.15rem',
+                  fontWeight: '800',
+                  color: '#0f172a',
+                }}
+              >
                 Add Skill Manually
               </h3>
-              <p style={{ fontSize: '0.82rem', color: '#64748b' }}>
+              <p
+                style={{
+                  fontSize: '0.82rem',
+                  color: '#64748b',
+                }}
+              >
                 Can't find a skill through AI? Enter any trade skill and claimed experience manually.
               </p>
             </div>
           </div>
 
           <form onSubmit={handleAddManualSkill}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1.2fr 0.8fr auto', gap: '12px' }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1.5fr 1.2fr 0.8fr auto',
+                gap: '12px',
+              }}
+            >
               <div>
                 <label className="input-label">Skill Name *</label>
                 <input
@@ -626,11 +949,18 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                   max="50"
                   className="input-control"
                   value={manualSkill.claimedExperienceYears}
-                  onChange={(e) => setManualSkill({ ...manualSkill, claimedExperienceYears: e.target.value })}
+                  onChange={(e) =>
+                    setManualSkill({ ...manualSkill, claimedExperienceYears: e.target.value })
+                  }
                 />
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-end',
+                }}
+              >
                 <button
                   type="submit"
                   disabled={addingManual}
@@ -664,12 +994,30 @@ export default function WorkerSkillsSection({ onSkillChange }) {
             boxShadow: '0 4px 6px -1px rgba(0,0,0,0.03)',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              marginBottom: '16px',
+            }}
+          >
             <div>
-              <h3 style={{ fontSize: '1.2rem', fontWeight: '800', color: '#0f172a' }}>
+              <h3
+                style={{
+                  fontSize: '1.2rem',
+                  fontWeight: '800',
+                  color: '#0f172a',
+                }}
+              >
                 Module 3: Structured Skills & Evidence Verification
               </h3>
-              <p style={{ fontSize: '0.82rem', color: '#64748b' }}>
+              <p
+                style={{
+                  fontSize: '0.82rem',
+                  color: '#64748b',
+                }}
+              >
                 Each skill is individually stored in MongoDB and verified separately. Upload certificates, work samples, or photos.
               </p>
             </div>
@@ -688,7 +1036,15 @@ export default function WorkerSkillsSection({ onSkillChange }) {
           </div>
 
           {loading ? (
-            <p style={{ textAlign: 'center', padding: '20px', color: '#64748b' }}>Loading structured skills...</p>
+            <p
+              style={{
+                textAlign: 'center',
+                padding: '20px',
+                color: '#64748b',
+              }}
+            >
+              Loading structured skills...
+            </p>
           ) : skills.length === 0 ? (
             <div
               style={{
@@ -700,12 +1056,23 @@ export default function WorkerSkillsSection({ onSkillChange }) {
               }}
             >
               <h4>No Structured Skills Added Yet</h4>
-              <p style={{ color: '#64748b', fontSize: '0.85rem', marginTop: '4px' }}>
+              <p
+                style={{
+                  color: '#64748b',
+                  fontSize: '0.85rem',
+                  marginTop: '4px',
+                }}
+              >
                 Use the AI Profiler above or enter skills manually to populate your profile.
               </p>
             </div>
           ) : (
-            <div style={{ display: 'grid', gap: '14px' }}>
+            <div
+              style={{
+                display: 'grid',
+                gap: '14px',
+              }}
+            >
               {skills.map((skill) => {
                 const isVerified = skill.verificationStatus === 'Verified';
                 const isPending = skill.verificationStatus === 'Pending';
@@ -729,8 +1096,21 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                     }}
                   >
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <h4 style={{ fontSize: '1.05rem', fontWeight: '800', color: '#0f172a', margin: 0 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                        }}
+                      >
+                        <h4
+                          style={{
+                            fontSize: '1.05rem',
+                            fontWeight: '800',
+                            color: '#0f172a',
+                            margin: 0,
+                          }}
+                        >
                           {skill.skillName}
                         </h4>
                         <span
@@ -743,7 +1123,11 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                             color: isVerified ? '#15803d' : isPending ? '#b45309' : '#475569',
                           }}
                         >
-                          {isVerified ? '✓ Verified Skill' : isPending ? '⏳ Verification Pending' : 'Unverified Claim'}
+                          {isVerified
+                            ? '✓ Verified Skill'
+                            : isPending
+                            ? '⏳ Verification Pending'
+                            : 'Unverified Claim'}
                         </span>
                         <span
                           style={{
@@ -758,17 +1142,35 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                           {skill.source === 'ai_suggested' ? 'AI Suggested' : 'Manual Entry'}
                         </span>
                       </div>
-                      <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '4px' }}>
+                      <div
+                        style={{
+                          fontSize: '0.8rem',
+                          color: '#64748b',
+                          marginTop: '4px',
+                        }}
+                      >
                         Category: <strong>{skill.category}</strong> • Claimed Experience: <strong>{skill.claimedExperienceYears} Years</strong>
                         {skill.evidenceStats?.total > 0 && (
-                          <span style={{ marginLeft: '10px', color: '#2563eb', fontWeight: '600' }}>
+                          <span
+                            style={{
+                              marginLeft: '10px',
+                              color: '#2563eb',
+                              fontWeight: '600',
+                            }}
+                          >
                             📁 {skill.evidenceStats.total} Evidence file(s) ({skill.evidenceStats.approved} Approved)
                           </span>
                         )}
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                      }}
+                    >
                       <button
                         type="button"
                         onClick={() => handleOpenEvidenceModal(skill)}
@@ -839,12 +1241,32 @@ export default function WorkerSkillsSection({ onSkillChange }) {
               boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.2)',
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '18px',
+              }}
+            >
               <div>
-                <h3 style={{ fontSize: '1.2rem', fontWeight: '800', color: '#0f172a', margin: 0 }}>
+                <h3
+                  style={{
+                    fontSize: '1.2rem',
+                    fontWeight: '800',
+                    color: '#0f172a',
+                    margin: 0,
+                  }}
+                >
                   Skill Evidence & Verification: {selectedSkill.skillName}
                 </h3>
-                <p style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>
+                <p
+                  style={{
+                    fontSize: '0.8rem',
+                    color: '#64748b',
+                    marginTop: '2px',
+                  }}
+                >
                   Upload certificates, photographs of past work, or work samples to verify this specific skill.
                 </p>
               </div>
@@ -866,16 +1288,41 @@ export default function WorkerSkillsSection({ onSkillChange }) {
             </div>
 
             {/* Previously Uploaded Evidence for this skill */}
-            <div style={{ marginBottom: '22px' }}>
-              <h4 style={{ fontSize: '0.92rem', fontWeight: '700', color: '#334155', marginBottom: '8px' }}>
+            <div
+              style={{
+                marginBottom: '22px',
+              }}
+            >
+              <h4
+                style={{
+                  fontSize: '0.92rem',
+                  fontWeight: '700',
+                  color: '#334155',
+                  marginBottom: '8px',
+                }}
+              >
                 Submitted Evidence for this Skill:
               </h4>
               {skillEvidenceList.length === 0 ? (
-                <p style={{ fontSize: '0.8rem', color: '#64748b', fontStyle: 'italic', background: '#f8fafc', padding: '10px', borderRadius: '8px' }}>
+                <p
+                  style={{
+                    fontSize: '0.8rem',
+                    color: '#64748b',
+                    fontStyle: 'italic',
+                    background: '#f8fafc',
+                    padding: '10px',
+                    borderRadius: '8px',
+                  }}
+                >
                   No evidence submitted yet for this skill. Upload a certificate or photo below.
                 </p>
               ) : (
-                <div style={{ display: 'grid', gap: '8px' }}>
+                <div
+                  style={{
+                    display: 'grid',
+                    gap: '8px',
+                  }}
+                >
                   {skillEvidenceList.map((ev) => (
                     <div
                       key={ev._id}
@@ -890,8 +1337,21 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                       }}
                     >
                       <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <span style={{ fontWeight: '700', fontSize: '0.9rem' }}>{ev.evidenceType}</span>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '8px',
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontWeight: '700',
+                              fontSize: '0.9rem',
+                            }}
+                          >
+                            {ev.evidenceType}
+                          </span>
                           <span
                             style={{
                               fontSize: '0.72rem',
@@ -915,17 +1375,34 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                             {ev.status}
                           </span>
                         </div>
-                        <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>
+                        <div
+                          style={{
+                            fontSize: '0.78rem',
+                            color: '#64748b',
+                            marginTop: '2px',
+                          }}
+                        >
                           File: {ev.fileName} • {ev.issuer ? `Issuer: ${ev.issuer}` : ''}{' '}
                           {ev.certificateNumber ? `(Cert: ${ev.certificateNumber})` : ''}
                         </div>
                         {ev.reviewNotes && (
-                          <div style={{ fontSize: '0.76rem', color: '#b45309', marginTop: '4px' }}>
+                          <div
+                            style={{
+                              fontSize: '0.76rem',
+                              color: '#b45309',
+                              marginTop: '4px',
+                            }}
+                          >
                             <strong>Admin Feedback:</strong> {ev.reviewNotes}
                           </div>
                         )}
                       </div>
-                      <div style={{ display: 'flex', gap: '8px' }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: '8px',
+                        }}
+                      >
                         {ev.status === 'Pending' && (
                           <button
                             type="button"
@@ -961,17 +1438,33 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                 border: '1px dashed #cbd5e1',
               }}
             >
-              <h4 style={{ fontSize: '0.94rem', fontWeight: '700', color: '#0f172a', marginBottom: '12px' }}>
+              <h4
+                style={{
+                  fontSize: '0.94rem',
+                  fontWeight: '700',
+                  color: '#0f172a',
+                  marginBottom: '12px',
+                }}
+              >
                 Upload New Evidence File
               </h4>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '12px',
+                }}
+              >
                 <div>
                   <label className="input-label">Evidence Type *</label>
                   <select
                     className="input-control"
                     value={evidenceForm.evidenceType}
-                    onChange={(e) => setEvidenceForm({ ...evidenceForm, evidenceType: e.target.value })}
+                    onChange={(e) =>
+                      setEvidenceForm({ ...evidenceForm, evidenceType: e.target.value })
+                    }
                   >
                     <option value="Certificate">Official Institute Certificate</option>
                     <option value="Work Photograph">Photograph of Completed Work</option>
@@ -993,7 +1486,14 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: '1fr 1fr',
+                  gap: '12px',
+                  marginBottom: '12px',
+                }}
+              >
                 <div>
                   <label className="input-label">Certificate / Roll / License #</label>
                   <input
@@ -1001,7 +1501,9 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                     placeholder="e.g. NAVTTC-2024-8821"
                     className="input-control"
                     value={evidenceForm.certificateNumber}
-                    onChange={(e) => setEvidenceForm({ ...evidenceForm, certificateNumber: e.target.value })}
+                    onChange={(e) =>
+                      setEvidenceForm({ ...evidenceForm, certificateNumber: e.target.value })
+                    }
                   />
                 </div>
 
@@ -1012,19 +1514,27 @@ export default function WorkerSkillsSection({ onSkillChange }) {
                     accept=".pdf,image/png,image/jpeg,image/jpg,image/webp"
                     className="input-control"
                     onChange={handleFileChange}
-                    style={{ padding: '6px' }}
+                    style={{
+                      padding: '6px',
+                    }}
                   />
                 </div>
               </div>
 
-              <div style={{ marginBottom: '14px' }}>
+              <div
+                style={{
+                  marginBottom: '14px',
+                }}
+              >
                 <label className="input-label">Short Description / Project Context</label>
                 <textarea
                   rows="2"
                   className="input-control"
                   placeholder="e.g. 6-month certified electrician diploma completed with distinction, covers 3-phase wiring and safety."
                   value={evidenceForm.description}
-                  onChange={(e) => setEvidenceForm({ ...evidenceForm, description: e.target.value })}
+                  onChange={(e) =>
+                    setEvidenceForm({ ...evidenceForm, description: e.target.value })
+                  }
                 />
               </div>
 
